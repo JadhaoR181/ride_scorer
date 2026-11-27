@@ -4,6 +4,8 @@ namespace ride {
 
 namespace {
 constexpr double kPi = 3.14159265358979323846;
+constexpr double kMaxGapS = 5.0;             // longer GPS gaps are not trusted
+constexpr double kMinHeadingSpeedMps = 1.0;  // GPS heading is noise below this speed
 }
 
 double wrap_deg(double d) {
@@ -19,11 +21,13 @@ std::vector<Motion> compute_motion(const std::vector<Sample>& s) {
 
     for (std::size_t i = 1; i < s.size(); ++i) {
         const double dt = s[i].t_s - s[i - 1].t_s;
-        if (dt <= 0.0) continue;  // bad or duplicate timestamp
+            if (dt <= 0.0 || dt > kMaxGapS) continue;  // bad timestamp or GPS gap
 
         const double long_acc = (s[i].speed_mps - s[i - 1].speed_mps) / dt;
+        const bool moving = s[i].speed_mps >= kMinHeadingSpeedMps;
         const double yaw_rate =
-            wrap_deg(s[i].heading_deg - s[i - 1].heading_deg) * kPi / 180.0 / dt;
+            moving ? wrap_deg(s[i].heading_deg - s[i - 1].heading_deg) * kPi / 180.0 / dt
+                   : 0.0;
         const double lat_acc = s[i].speed_mps * yaw_rate;
 
         out.push_back({s[i].t_s, s[i].speed_mps, long_acc, lat_acc});

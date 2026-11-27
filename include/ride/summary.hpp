@@ -13,6 +13,8 @@ struct TripSummary {
     int harsh_accels;
     int hard_corners;
     int score;  // 0-100, higher is smoother
+    double max_speed_kmh;
+    double idle_share;  // fraction of trip time spent below ~1 m/s
 };
 
 TripSummary summarize(const std::vector<Motion>& motion, const std::vector<Event>& events);

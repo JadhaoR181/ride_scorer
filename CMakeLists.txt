@@ -12,7 +12,7 @@ else()
 endif()
 
 add_library(ride_core src/csv_reader.cpp src/kinematics.cpp src/smoother.cpp
-                      src/events.cpp src/summary.cpp)
+                      src/events.cpp src/summary.cpp src/report.cpp)
 target_include_directories(ride_core PUBLIC include)
 
 add_executable(ride_cli src/main.cpp)
@@ -22,12 +22,14 @@ include(FetchContent)
 FetchContent_Declare(
   googletest
   URL https://github.com/google/googletest/archive/refs/tags/v1.14.0.tar.gz
+  DOWNLOAD_EXTRACT_TIMESTAMP TRUE
 )
 set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(googletest)
 
 enable_testing()
-add_executable(ride_tests tests/kinematics_test.cpp tests/events_test.cpp)
+add_executable(ride_tests tests/kinematics_test.cpp tests/events_test.cpp
+                          tests/report_test.cpp)
 target_link_libraries(ride_tests PRIVATE ride_core GTest::gtest_main)
 
 include(GoogleTest)

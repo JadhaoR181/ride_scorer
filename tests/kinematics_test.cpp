@@ -43,3 +43,15 @@ TEST(Motion, SkipsBadTimestamps) {
     std::vector<Sample> s = {{1, 5, 0}, {1, 6, 0}};
     EXPECT_TRUE(ride::compute_motion(s).empty());
 }
+
+TEST(Motion, LongGpsGapIsSkipped) {
+    std::vector<Sample> s = {{0, 10, 0}, {10, 20, 0}};
+    EXPECT_TRUE(ride::compute_motion(s).empty());
+}
+
+TEST(Motion, HeadingNoiseWhileStoppedGivesNoLateralAcceleration) {
+    std::vector<Sample> s = {{0, 0, 0}, {1, 0, 90}};
+    auto m = ride::compute_motion(s);
+    ASSERT_EQ(m.size(), 1u);
+    EXPECT_NEAR(m[0].lat_acc, 0.0, 1e-9);
+}
