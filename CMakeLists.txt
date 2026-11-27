@@ -11,7 +11,8 @@ else()
   add_compile_options(-Wall -Wextra -Wpedantic)
 endif()
 
-add_library(ride_core src/csv_reader.cpp src/kinematics.cpp)
+add_library(ride_core src/csv_reader.cpp src/kinematics.cpp src/smoother.cpp
+                      src/events.cpp src/summary.cpp)
 target_include_directories(ride_core PUBLIC include)
 
 add_executable(ride_cli src/main.cpp)
@@ -26,7 +27,7 @@ set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(googletest)
 
 enable_testing()
-add_executable(ride_tests tests/kinematics_test.cpp)
+add_executable(ride_tests tests/kinematics_test.cpp tests/events_test.cpp)
 target_link_libraries(ride_tests PRIVATE ride_core GTest::gtest_main)
 
 include(GoogleTest)
