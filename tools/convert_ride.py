@@ -1,10 +1,19 @@
 #!/usr/bin/env python3
-"""Convert a phone GPS log into time_s,speed_mps,heading_deg for ride_cli."""
+"""Convert a Phyphox GPS export (zip or csv) into time_s,speed_mps,heading_deg at a
+fixed rate, ready for ride_cli.
+
+Why resample? Phone GPS rows arrive at irregular times, sometimes a few milliseconds
+apart. Acceleration = change in speed / change in time, so tiny time gaps would turn
+small speed noise into huge fake accelerations.
+
+Usage: python tools/convert_ride.py export.zip data/ride_01.csv
+"""
 import argparse
 import csv
+import io
 import math
 import sys
-from datetime import datetime
+import zipfile
 
 
 def find(headers, *keys, exclude=()):
@@ -25,28 +34,23 @@ def num(row, i):
     return None if math.isnan(v) else v
 
 
-def parse_time(text):
-    try:
-        x = float(text)
-        return x / 1000.0 if x > 1e11 else x  # epoch milliseconds -> seconds
-    except ValueError:
-        return datetime.fromisoformat(text.strip().replace("Z", "+00:00")).timestamp()
+def read_text(path):
+    if path.lower().endswith(".zip"):
+        with zipfile.ZipFile(path) as z:
+            names = [n for n in z.namelist()
+                     if n.lower().endswith(".csv") and not n.lower().startswith("meta/")]
+            if not names:
+                sys.exit("No data CSV found inside the zip.")
+            name = next((n for n in names if "raw" in n.lower()), names[0])
+            print("Reading", name, "from the zip")
+            return z.read(name).decode("utf-8-sig")
+    with open(path, encoding="utf-8-sig", newline="") as f:
+        return f.read()
 
 
-def haversine_m(lat1, lon1, lat2, lon2):
-    r = 6371000.0
-    p1, p2 = math.radians(lat1), math.radians(lat2)
-    dp, dl = p2 - p1, math.radians(lon2 - lon1)
-    a = math.sin(dp / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(dl / 2) ** 2
-    return 2 * r * math.asin(math.sqrt(a))
-
-
-def bearing_deg(lat1, lon1, lat2, lon2):
-    p1, p2 = math.radians(lat1), math.radians(lat2)
-    dl = math.radians(lon2 - lon1)
-    y = math.sin(dl) * math.cos(p2)
-    x = math.cos(p1) * math.sin(p2) - math.sin(p1) * math.cos(p2) * math.cos(dl)
-    return (math.degrees(math.atan2(y, x)) + 360.0) % 360.0
+def interp_heading(h0, h1, f):
+    d = ((h1 - h0 + 540.0) % 360.0) - 180.0  # shortest way round the circle
+    return (h0 + d * f) % 360.0
 
 
 def main():
@@ -54,81 +58,94 @@ def main():
     ap.add_argument("input")
     ap.add_argument("output")
     ap.add_argument("--kmh", action="store_true", help="speed column is in km/h")
+    ap.add_argument("--hz", type=float, default=1.0, help="output rate (default 1)")
+    ap.add_argument("--max-acc", type=float, default=25.0,
+                    help="drop fixes with horizontal accuracy worse than this, metres")
+    ap.add_argument("--max-gap", type=float, default=5.0,
+                    help="do not bridge GPS gaps longer than this, seconds")
     args = ap.parse_args()
 
-    with open(args.input, newline="", encoding="utf-8-sig") as f:
-        text = f.read()
+    text = read_text(args.input)
     try:
         dialect = csv.Sniffer().sniff(text[:2048], delimiters=",;\t")
     except csv.Error:
         dialect = csv.excel
-    rows = list(csv.reader(text.splitlines(), dialect))
+    rows = list(csv.reader(io.StringIO(text), dialect))
     headers, data = rows[0], rows[1:]
     print("Columns found:", headers)
 
     t_i = find(headers, "time")
-    sp_i = find(headers, "speed", exclude=("acc",))
+    sp_i = find(headers, "speed", "velocity", exclude=("acc",))
     hd_i = find(headers, "direction", "bearing", "heading", "course", exclude=("acc",))
-    la_i = find(headers, "lat", exclude=("acc",))
-    lo_i = find(headers, "lon", exclude=("acc",))
+    acc_i = find(headers, "horizontal acc", "hacc")
+    if t_i is None or sp_i is None:
+        sys.exit("Need a time column and a speed/velocity column.")
 
-    if t_i is None:
-        sys.exit("No time column found.")
-    if (sp_i is None or hd_i is None) and (la_i is None or lo_i is None):
-        sys.exit("Need speed+heading columns, or latitude+longitude to derive them.")
-
-    pts = []
+    pts, no_speed, bad_acc = [], 0, 0
     for r in data:
-        try:
-            t = parse_time(r[t_i])
-        except (ValueError, IndexError):
-            continue
+        t = num(r, t_i)
         sp = num(r, sp_i)
-        if sp is not None and args.kmh:
+        if t is None:
+            continue
+        if sp is None or sp < 0:
+            no_speed += 1  # iOS reports no speed when it has no good fix
+            continue
+        if args.kmh:
             sp /= 3.6
-        hd = num(r, hd_i)
-        if hd is not None and hd < 0:
-            hd = None  # some apps use -1 for "unknown"
-        pts.append({"t": t, "lat": num(r, la_i), "lon": num(r, lo_i), "speed": sp, "heading": hd})
+        acc = num(r, acc_i)
+        if acc is not None and acc > args.max_acc:
+            bad_acc += 1
+            continue
+        pts.append({"t": t, "speed": sp, "heading": num(r, hd_i)})
 
+    print(f"Rows: {len(data)}, no valid speed: {no_speed}, poor accuracy: {bad_acc}, "
+          f"usable: {len(pts)}")
     if len(pts) < 2:
-        sys.exit("Not enough valid rows.")
+        sys.exit("Not enough usable GPS rows. Was there a clear sky view and were you "
+                 "moving? Indoors or standing still the phone often gives no speed.")
 
-    for k in range(1, len(pts)):
-        a, b = pts[k - 1], pts[k]
-        if None in (a["lat"], a["lon"], b["lat"], b["lon"]):
-            continue
-        dt = b["t"] - a["t"]
-        if dt <= 0:
-            continue
-        if b["speed"] is None:
-            b["speed"] = haversine_m(a["lat"], a["lon"], b["lat"], b["lon"]) / dt
-        if b["heading"] is None:
-            b["heading"] = bearing_deg(a["lat"], a["lon"], b["lat"], b["lon"])
+    pts.sort(key=lambda p: p["t"])
+    clean = []
+    for p in pts:  # collapse bursts of rows less than 0.2 s apart, keep the later one
+        if clean and p["t"] - clean[-1]["t"] < 0.2:
+            clean[-1] = p
+        else:
+            clean.append(p)
+    last_h = 0.0
+    for p in clean:  # unknown heading (standing still) -> carry the last known one
+        if p["heading"] is None or p["heading"] < 0:
+            p["heading"] = last_h
+        else:
+            last_h = p["heading"]
+    if len(clean) < 2:
+        sys.exit("Not enough usable GPS rows after cleaning.")
 
-    t0 = pts[0]["t"]
-    last_heading = 0.0
-    kept = 0
-    max_speed = 0.0
-    last_t = t0
+    t0, t1 = clean[0]["t"], clean[-1]["t"]
+    out, j = [], 0
+    for k in range(int(math.floor((t1 - t0) * args.hz)) + 1):
+        g = t0 + k / args.hz
+        while j + 2 < len(clean) and clean[j + 1]["t"] < g:
+            j += 1
+        a, b = clean[j], clean[j + 1]
+        span = b["t"] - a["t"]
+        if span > args.max_gap:
+            continue  # inside a GPS gap, do not invent data
+        f = min(max((g - a["t"]) / span, 0.0), 1.0) if span > 0 else 0.0
+        out.append((g - t0, a["speed"] + f * (b["speed"] - a["speed"]),
+                    interp_heading(a["heading"], b["heading"], f)))
+
     with open(args.output, "w", newline="") as f:
         w = csv.writer(f)
         w.writerow(["time_s", "speed_mps", "heading_deg"])
-        for p in pts:
-            if p["speed"] is None:
-                continue
-            if p["heading"] is not None:
-                last_heading = p["heading"]
-            w.writerow([f"{p['t'] - t0:.3f}", f"{p['speed']:.3f}", f"{last_heading:.1f}"])
-            kept += 1
-            max_speed = max(max_speed, p["speed"])
-            last_t = p["t"]
+        for t, s, h in out:
+            w.writerow([f"{t:.3f}", f"{s:.3f}", f"{h:.1f}"])
 
-    print(f"Wrote {kept} rows, {last_t - t0:.0f} s, max speed {max_speed * 3.6:.1f} km/h")
-    if max_speed * 3.6 > 200:
+    max_kmh = max(s for _, s, _ in out) * 3.6 if out else 0.0
+    print(f"Wrote {len(out)} rows covering {t1 - t0:.0f} s, max speed {max_kmh:.1f} km/h")
+    if max_kmh > 200:
         print("WARNING: max speed looks too high. Is the speed column km/h? Try --kmh.")
-    if 0 < max_speed * 3.6 < 5:
-        print("WARNING: max speed looks too low. Check the speed units.")
+    elif 0 < max_kmh < 5:
+        print("WARNING: max speed under 5 km/h. Was the phone actually moving?")
 
 
 if __name__ == "__main__":

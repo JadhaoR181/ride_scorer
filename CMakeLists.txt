@@ -29,8 +29,10 @@ FetchContent_MakeAvailable(googletest)
 
 enable_testing()
 add_executable(ride_tests tests/kinematics_test.cpp tests/events_test.cpp
-                          tests/report_test.cpp)
+                          tests/report_test.cpp tests/pipeline_test.cpp)
 target_link_libraries(ride_tests PRIVATE ride_core GTest::gtest_main)
+target_compile_definitions(ride_tests PRIVATE
+                           RIDE_DATA_DIR="${CMAKE_SOURCE_DIR}/data")
 
 include(GoogleTest)
 gtest_discover_tests(ride_tests)

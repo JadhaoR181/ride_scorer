@@ -55,3 +55,10 @@ TEST(Motion, HeadingNoiseWhileStoppedGivesNoLateralAcceleration) {
     ASSERT_EQ(m.size(), 1u);
     EXPECT_NEAR(m[0].lat_acc, 0.0, 1e-9);
 }
+
+TEST(Motion, FirstSampleAfterStopIgnoresStaleHeading) {
+    std::vector<Sample> s = {{0, 0, 10}, {1, 5, 200}};
+    auto m = ride::compute_motion(s);
+    ASSERT_EQ(m.size(), 1u);
+    EXPECT_NEAR(m[0].lat_acc, 0.0, 1e-9);
+}

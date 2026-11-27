@@ -21,10 +21,11 @@ std::vector<Motion> compute_motion(const std::vector<Sample>& s) {
 
     for (std::size_t i = 1; i < s.size(); ++i) {
         const double dt = s[i].t_s - s[i - 1].t_s;
-            if (dt <= 0.0 || dt > kMaxGapS) continue;  // bad timestamp or GPS gap
+        if (dt <= 0.0 || dt > kMaxGapS) continue;  // bad timestamp or GPS gap
 
         const double long_acc = (s[i].speed_mps - s[i - 1].speed_mps) / dt;
-        const bool moving = s[i].speed_mps >= kMinHeadingSpeedMps;
+        const bool moving = s[i].speed_mps >= kMinHeadingSpeedMps &&
+                            s[i - 1].speed_mps >= kMinHeadingSpeedMps;
         const double yaw_rate =
             moving ? wrap_deg(s[i].heading_deg - s[i - 1].heading_deg) * kPi / 180.0 / dt
                    : 0.0;
